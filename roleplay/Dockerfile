@@ -31,6 +31,11 @@ COPY requirements.txt .
 RUN python -m pip install --user --no-cache-dir -r requirements.txt
 
 COPY agent_worker.py .
+COPY character_config.py .
+COPY conversation_flow.py .
+COPY case_studies.py .
+COPY evaluation.py .
+COPY prompts/ ./prompts/
 COPY .env .
 
 ENTRYPOINT ["python", "agent_worker.py"]
