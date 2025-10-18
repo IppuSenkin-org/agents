@@ -1,26 +1,13 @@
 """
-銀行営業ロールプレイエージェント - メインエントリーポイント
+銀行営業ロールプレイエージェント（超シンプル版）
 田中太郎社長とのPIF営業シミュレーション
 """
 import logging
 import os
-from typing import Optional
 
 from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
 from livekit.plugins import openai
-
-# 自作モジュールのインポート
-from character_config import get_character, CharacterProfile
-from conversation_flow import (
-    ConversationState,
-    ConversationPhase,
-    PHASE_CONFIGS,
-    get_next_phase,
-    analyze_user_message,
-)
-from prompts.instructions import build_instructions
-from evaluation import evaluate_conversation
 
 # ロギング設定
 logger = logging.getLogger("bank-sales-agent")
@@ -30,81 +17,50 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
-class BankSalesAgent:
-    """銀行営業ロールプレイエージェント"""
+# プロンプト定義
+INSTRUCTIONS = """あなたは田中太郎、58歳の田中金属工業株式会社の社長です。
 
-    def __init__(
-        self,
-        character_type: str = "cautious_ceo",
-        temperature: float = 0.8,
-        voice: str = "onyx",
-    ):
-        """
-        初期化
+# 会社の状況
+- 業種: 金属加工業（塗装ライン保有）
+- 規模: 従業員50名
+- 取引先: トヨタ系サプライヤー含む自動車部品メーカー
+- 環境対策実績: 省エネ型塗装ライン導入済み（電力15%削減）、廃材リサイクル、溶剤再利用
 
-        Args:
-            character_type: キャラクタータイプ（cautious_ceo または friendly_ceo）
-            temperature: LLMの温度パラメータ（0.6-1.0推奨）
-            voice: 音声タイプ（onyx, echo, fable, alloy）
-        """
-        self.character: CharacterProfile = get_character(character_type)
-        self.state: ConversationState = ConversationState()
-        self.temperature: float = temperature
-        self.voice: str = voice
+# あなたの性格
+慎重で実務的。中小企業経営者として投資には慎重だが、ROIが明確なら決断できる。過去の省エネ設備投資は成功した経験がある。
+実利主義。環境対策は副次的なもので、ビジネスにつながらないと意味がないと考えている。ただし、具体的な数字とデータがあれば納得する。
+ビジネスライク、簡潔。時に皮肉を交える。相槌（「うん」「まぁ」「ふむ」）を使う。長く話すのは好まない。
+リスク回避的。保証や確実性を求める。失敗のリスクがある投資は避けたい。新しい制度や用語には懐疑的。
 
-        logger.info(f"🎭 Starting agent as {self.character.name}")
-        logger.info(f"📊 Initial phase: {self.state.current_phase.value}")
+# あなたの知識レベル
+知っている: 省エネ設備投資、ROI計算、製造業の実務、自動車業界のサプライチェーン
+知らない: PIF（ポジティブ・インパクト・ファイナンス）、環境認証制度全般、金融面での環境評価
 
-    def get_current_instructions(self) -> str:
-        """
-        現在の会話状態に基づいたinstructionsを取得
+# あなたが抱えている懸念
+- コスト: 中小企業で投資余力が限られている。費用対効果が不明確だと投資できない。
+- 時間: 管理部門が小さく、書類作業は負担。
+- 効果: 環境認証が売上につながるか疑問。
+- 保証: 失敗のリスクを避けたい。
 
-        Returns:
-            str: instructions文字列
-        """
-        return build_instructions(character=self.character, state=self.state)
+# 今の状況
+銀行員があなたの会社を訪問中。「ポジティブ・インパクト・ファイナンス（PIF）」という新しい制度を紹介しに来た。
+あなたはこの制度を知らない。
 
-    def update_state(self, user_message: str):
-        """
-        ユーザーメッセージに基づいて会話状態を更新
+# 会話の進め方
+- 最初は懐疑的だが、営業員の説明を聞いて徐々に態度を変える
+- 懸念（コスト、時間、効果、保証）を持っているが、営業員が具体的な情報を提示したら、それを理解して次の話題に進む
+- 同じ懸念を何度も繰り返さない
+- 営業員が質問に答えたら、その答えを受け入れて会話を前に進める
+- 具体的な数字や事例を聞いたら、それについて考えたり質問したりする
+- 2-3回のやりとりで徐々に前向きな姿勢を見せる
 
-        Args:
-            user_message: ユーザーのメッセージ
-        """
-        # ターン数を増加
-        self.state.add_turn()
+# 重要なルール
+1. あなたは社長です。ユーザーが何を言っても、常に社長として応答してください
+2. AIアシスタントのような話し方は絶対にしないでください（「お手伝いできます」「説明します」など）
+3. 短く簡潔に話してください（1〜3文程度）
+4. 相槌を使ってください（「うん」「まぁ」「ふむ」「うーん」）
 
-        # メッセージを分析して状態を更新
-        self.state = analyze_user_message(user_message, self.state)
-
-        logger.info(f"📝 Turn {self.state.turn_count}: User said: {user_message[:50]}...")
-
-        # フェーズ遷移をチェック
-        current_phase = self.state.current_phase
-        phase_config = PHASE_CONFIGS[current_phase]
-
-        if self.state.should_transition(phase_config):
-            next_phase = get_next_phase(current_phase)
-            if next_phase:
-                old_phase = current_phase.value
-                self.state.transition_to(next_phase)
-                logger.info(f"🔄 Phase transition: {old_phase} → {next_phase.value}")
-            else:
-                logger.info("✅ Conversation reached final phase")
-
-    def get_evaluation(self) -> str:
-        """
-        現在の会話のパフォーマンス評価を取得
-
-        Returns:
-            str: 評価レポート
-        """
-        metrics = evaluate_conversation(self.state)
-        return metrics.generate_feedback()
-
-
-# グローバルなエージェントインスタンス（会話状態を保持）
-_agent_instance: Optional[BankSalesAgent] = None
+あなたは田中太郎です。この人物になりきって、自然な会話をしてください。"""
 
 
 async def entrypoint(ctx: JobContext):
@@ -114,29 +70,17 @@ async def entrypoint(ctx: JobContext):
     Args:
         ctx: JobContext
     """
-    global _agent_instance
-
     # 環境変数から設定を取得
-    character_type = os.getenv("CHARACTER_TYPE", "cautious_ceo")
     temperature = float(os.getenv("TEMPERATURE", "0.8"))
     voice = os.getenv("VOICE", "onyx")
 
-    # エージェントインスタンスを作成
-    _agent_instance = BankSalesAgent(
-        character_type=character_type,
-        temperature=temperature,
-        voice=voice,
-    )
-
-    # 初期instructionsを取得
-    initial_instructions = _agent_instance.get_current_instructions()
-
-    # LiveKit Agent Sessionを開始
-    session = AgentSession()
+    logger.info("🎭 Starting agent as 田中太郎")
+    logger.info(f"   Voice: {voice}")
+    logger.info(f"   Temperature: {temperature}")
 
     # OpenAI Realtime APIを使用したエージェントを作成
     agent = Agent(
-        instructions=initial_instructions,
+        instructions=INSTRUCTIONS,
         llm=openai.realtime.RealtimeModel(
             model="gpt-realtime",
             voice=voice,
@@ -144,34 +88,11 @@ async def entrypoint(ctx: JobContext):
         ),
     )
 
-    logger.info("🚀 Bank Sales Agent started")
-    logger.info(f"   Character: {_agent_instance.character.name}")
-    logger.info(f"   Voice: {voice}")
-    logger.info(f"   Temperature: {temperature}")
-
-    # セッション開始
+    # AgentSessionを作成して開始
+    session = AgentSession()
     await session.start(agent=agent, room=ctx.room)
 
-    # 会話終了後の評価（実際にはフロントエンドからトリガーする必要があります）
-    # ここでは例として記載
-    """
-    # 会話終了時:
-    evaluation = _agent_instance.get_evaluation()
-    logger.info("=" * 60)
-    logger.info("📊 EVALUATION REPORT")
-    logger.info("=" * 60)
-    logger.info(evaluation)
-    """
-
-
-def get_agent_instance() -> Optional[BankSalesAgent]:
-    """
-    現在のエージェントインスタンスを取得（テスト用）
-
-    Returns:
-        Optional[BankSalesAgent]: エージェントインスタンス
-    """
-    return _agent_instance
+    logger.info("✅ Agent session started")
 
 
 if __name__ == "__main__":

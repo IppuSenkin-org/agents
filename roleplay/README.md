@@ -1,4 +1,4 @@
-# 銀行営業ロールプレイエージェント
+# 銀行営業ロールプレイエージェント（シンプル版）
 
 ## 概要
 
@@ -6,60 +6,75 @@
 
 **キャラクター**: 田中太郎社長（58歳）、田中金属工業株式会社の代表取締役
 **技術スタック**: LiveKit Agents + OpenAI Realtime API (gpt-realtime)
-**設計バージョン**: 2025年最新ベストプラクティス準拠
+**実装方針**: シンプルで柔軟な設計（詳細な背景知識でLLMが自然に反応）
 
 ## 特徴
 
-### ✨ 2025年ベストプラクティス対応
+### ✨ シンプルで自然な会話
 
-- **詳細な口調・反応パターン**: 実際の会話例を再現できる具体的な speech_patterns
-- **動的プロンプト生成**: 会話状態に応じて instructions を動的に生成
-- **トリガーベースのフェーズ遷移**: ターン数だけでなく、キーワードや提供データに基づく自然な遷移
-- **リアルタイムフィードバック**: 営業パフォーマンスの自動評価とスコアリング
-- **Semantic VAD**: 文の途中で切らない自然な会話フロー
+**従来の問題点**:
+- 具体的なセリフを指定していたため「台本通り」の会話になっていた
+- フェーズ管理システムが複雑で、柔軟性に欠けていた
+- 1,600行以上のコードでメンテナンスが困難
 
-### 🎭 キャラクター特性
+**新しいアプローチ**:
+- ✅ **詳細な人物像と背景**を設定（性格、価値観、経験、懸念の理由）
+- ✅ **セリフは指定せず**、LLMが文脈に応じて自然に反応
+- ✅ **300行未満のシンプルなコード**（81%削減）
+- ✅ 同じ営業トークでも毎回違う展開になる柔軟性
+- ✅ 会話の方向性は維持しつつ、予測不可能な人間らしさ
 
-田中太郎社長は以下のような特徴を持っています:
+### 🎭 田中太郎社長の特徴
 
-- 慎重で実務的な決断スタイル
-- 短く簡潔に話す（「うん、まぁ」「ふむ」などの相槌）
-- 新しい用語には戸惑う（「ポジティブ…インパクト？初めて聞いたな」）
-- 具体的な数字に強く反応する
-- 段階的に態度を変化させる（懐疑的 → 興味 → 検討）
+田中太郎社長は以下のような人物です:
 
-### 📊 3つの会話フェーズ
+**性格と価値観**:
+- 慎重で実務的な決断スタイル（ROIが明確なら決断できる）
+- ビジネスライク、簡潔（相槌「うん」「まぁ」「ふむ」を使う）
+- 実利主義（環境は副次的、ビジネスにつながらないと意味がない）
+- リスク回避的（保証や確実性を求める）
 
-1. **SKEPTICAL（懐疑的）**: 2-5ターン
-   - コストへの懸念
-   - 新制度への不信感
+**知識と経験**:
+- 省エネ設備投資の成功経験あり
+- PIFや環境認証制度は知らない
+- ROI計算は得意だが、書類作業は苦手
 
-2. **INTERESTED（興味）**: 3-7ターン
-   - 質問が増える
-   - 具体的な数字に反応
+**主な懸念**:
+- **コスト**: 投資回収の確実性が不明
+- **時間**: 50名規模で管理部門が小さく、書類作業は負担
+- **効果**: 環境認証が売上につながった経験がない
+- **保証**: 失敗のリスクを避けたい
 
-3. **CONSIDERING（検討）**: 2-5ターン
-   - 前向きだが即決しない
-   - 資料要求
+### 🔄 自然な態度の変化
+
+明示的なフェーズ管理はせず、LLMが文脈に応じて自然に態度を変えます:
+
+```
+初期: 懐疑的だが話は聞く
+  ↓ (具体的な事例を聞く)
+関心: コストとROIを確認したい
+  ↓ (数字を聞いて計算する)
+評価: 悪くないが時間が心配
+  ↓ (サポート体制を知る)
+検討: 保証はないが検討の価値あり
+  ↓ (リスクが低いと判断)
+前向き: 資料を見て判断したい
+```
 
 ## ディレクトリ構成
 
 ```
 agents/roleplay/
-├── agent_worker.py              # メインエントリーポイント
-├── character_config.py          # キャラクター設定
-├── conversation_flow.py         # 会話フロー管理
-├── case_studies.py              # 事例データベース
-├── evaluation.py                # フィードバック機能
-├── prompts/
-│   ├── __init__.py
-│   └── instructions.py          # 動的プロンプト生成
+├── agent_worker.py              # メインエントリーポイント（69行）
+├── character_config.py          # キャラクター設定（89行）
+├── simple_prompt.py             # プロンプト生成（140行）
 ├── requirements.txt
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
-├── bank_sales_design.md         # 設計書
 └── README.md
+
+合計: 約300行（従来の1/5）
 ```
 
 ## セットアップ
@@ -84,24 +99,12 @@ LIVEKIT_API_SECRET=your_secret
 OPENAI_API_KEY=sk-...
 
 # エージェント設定（オプション）
-CHARACTER_TYPE=cautious_ceo  # cautious_ceo | friendly_ceo
-TEMPERATURE=0.8              # 0.6-1.0
-VOICE=onyx                   # onyx | echo | fable | alloy
+CHARACTER_TYPE=cautious_ceo  # 現在はこれのみサポート
+TEMPERATURE=0.8              # 0.6-1.0（低いほど安定、高いほど多様）
+VOICE=onyx                   # onyx, echo, fable, alloy
 ```
 
-### 2. 依存パッケージのインストール
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. エージェントの起動
-
-#### ローカル実行
-
-```bash
-python agent_worker.py dev
-```
+### 2. エージェントの起動
 
 #### Docker実行（推奨）
 
@@ -109,14 +112,21 @@ python agent_worker.py dev
 docker-compose up --build
 ```
 
+#### ローカル実行
+
+```bash
+pip install -r requirements.txt
+python agent_worker.py dev
+```
+
 ## 使い方
 
 ### 基本的な流れ
 
-1. **フロントエンド（agent-starter-react）を起動**
+1. **フロントエンド（ai-roleplay-demo-front）を起動**
 2. **エージェントを起動**（上記のコマンド）
 3. **ブラウザで接続して営業ロープレを開始**
-4. **会話終了後、ログでフェーズ遷移を確認**
+4. **会話を楽しむ**（毎回違う展開になります）
 
 ### 会話例
 
@@ -126,84 +136,196 @@ docker-compose up --build
 
 社長: 「うん、まぁ聞くだけ聞くけど。新しい制度ってなんだ？」
 
-営業: 「"ポジティブ・インパクト・ファイナンス"というもので...」
+営業: 「"ポジティブ・インパクト・ファイナンス"というもので、
+      簡単に言うと企業の環境や地域への良い取り組みを
+      金融面で応援する仕組みです。」
 
-社長: 「ポジティブ…インパクト？初めて聞いたな」
+社長: 「ポジティブ…インパクト？初めて聞いたな。
+      どうせ証明書出して終わりじゃないの？」
 
-営業: 「群馬の部品メーカーさんでは20万円の投資で...」
+営業: 「群馬の部品メーカーさんでは20〜30万円の投資で、
+      トヨタ系の調達評価でランクAを取得し、
+      発注量が1.2倍に増えたそうです。」
 
 社長: 「それ、いくらくらいかかったんだ？」
-      ↑ この時点でフェーズがSKEPTICAL → INTERESTEDに遷移
+      ↑ 具体的な数字に反応し始める
 ```
+
+※ 同じ営業トークでも、社長の返答は毎回微妙に変わります
 
 ## フロントエンドとの接続
 
 このエージェントは `bank-sales-agent` という名前で登録されています。
 
-フロントエンド (`agent-starter-react/app-config.ts`) で以下のように指定:
+フロントエンド (`ai-roleplay-demo-front/app-config.ts`) で以下のように指定:
 ```typescript
 agentName: 'bank-sales-agent',
 ```
 
-## 主要機能の詳細
+## 主要ファイルの説明
 
-### 1. キャラクター設定（character_config.py）
+### 1. character_config.py
 
-田中太郎社長の詳細な speech_patterns を定義:
+田中太郎社長の詳細なプロファイルを定義:
 
 ```python
-speech_patterns = {
-    "opening": ["うん、まぁ聞くだけ聞くけど", ...],
-    "skepticism": ["どうせ〜じゃないの?", ...],
-    "cost_concern": ["それ、いくらくらいかかったんだ？", ...],
-}
+TANAKA_CEO = CharacterProfile(
+    name="田中太郎",
+    age=58,
+    company_name="田中金属工業株式会社",
+
+    # 性格・価値観（なぜそう考えるか）
+    personality={
+        "decision_style": "慎重で実務的。ROIが明確なら決断できる...",
+        "values": "実利主義。環境は副次的...",
+        ...
+    },
+
+    # 懸念とその理由
+    concerns={
+        "cost": "投資回収の確実性。中小企業で投資余力が限られている...",
+        "time": "50名規模で管理部門が小さい。書類作業は本業を奪う...",
+        ...
+    }
+)
 ```
 
-### 2. 会話フロー管理（conversation_flow.py）
+### 2. simple_prompt.py
 
-トリガーベースのフェーズ遷移とユーザーメッセージの自動分析
+キャラクターの背景知識を含むプロンプトを生成:
 
-### 3. 動的プロンプト生成（prompts/instructions.py）
+- 人物像の詳細説明
+- 会社の具体的背景
+- 知識と経験のレベル
+- 懸念の理由
+- 参考事例（背景知識として）
+- 基本ルール（AIっぽい話し方禁止等）
 
-会話状態に応じて instructions を動的に生成
+### 3. agent_worker.py
 
-### 4. 評価・フィードバック（evaluation.py）
+シンプルなエントリーポイント:
 
-営業パフォーマンスを自動評価（総合スコア、懸念への対応、数字の活用度など）
+```python
+# キャラクターを取得
+character = get_character(character_type)
+
+# プロンプトを生成
+instructions = build_prompt(character)
+
+# エージェントを作成
+agent = Agent(
+    instructions=instructions,
+    llm=openai.realtime.RealtimeModel(
+        model="gpt-realtime",
+        voice=voice,
+        temperature=temperature,
+    ),
+)
+```
 
 ## カスタマイズ
 
-### キャラクターの変更
-
-`.env`で設定:
-```bash
-CHARACTER_TYPE=friendly_ceo  # より前向きな社長
-```
-
 ### 温度とボイスの調整
 
+`.env`ファイルで設定:
+
 ```bash
-TEMPERATURE=0.7  # 0.6-1.0（低いほど安定）
+# より安定した会話（予測しやすい）
+TEMPERATURE=0.7
+
+# より多様な会話（予測しにくい）
+TEMPERATURE=0.9
+
+# 音声の変更
 VOICE=echo       # onyx, echo, fable, alloy
+```
+
+### 社長の性格を変更
+
+`character_config.py`の`TANAKA_CEO`を編集:
+
+```python
+personality={
+    "decision_style": "より積極的に新しい投資を検討する...",
+    "values": "環境対策を重視する...",
+    ...
+}
+```
+
+### プロンプトの調整
+
+`simple_prompt.py`の`build_prompt()`関数を編集:
+
+```python
+def build_prompt(character: CharacterProfile = TANAKA_CEO) -> str:
+    prompt = f"""
+    # あなたの役割
+
+    あなたは{character.name}...
+
+    # （ここに追加の指示を記述）
+    """
+    return prompt
 ```
 
 ## トラブルシューティング
 
-- **会話が不自然**: `TEMPERATURE`を調整（0.7〜0.9）
-- **すぐに納得してしまう**: `conversation_flow.py`のmin_turnsを増やす
-- **音声が合わない**: `.env`で`VOICE`を変更
+### 会話が不自然
+
+**原因**: TEMPERATURE設定が不適切
+**解決**: `.env`で調整（0.7〜0.9の範囲）
+
+```bash
+TEMPERATURE=0.8  # バランスの取れた設定
+```
+
+### 社長がすぐに納得してしまう
+
+**原因**: プロンプトの指示が弱い
+**解決**: `simple_prompt.py`で「段階的に態度を変える」の指示を強化
+
+### 音声が合わない
+
+**原因**: VOICE設定が不適切
+**解決**: `.env`で変更
+
+```bash
+VOICE=onyx   # 低めの男性声（推奨）
+VOICE=echo   # 中間の男性声
+VOICE=fable  # 高めの男性声
+```
+
+### 会話が台本通りになる
+
+これは起こらないはずです！もし起こった場合:
+1. `simple_prompt.py`に具体的なセリフが含まれていないか確認
+2. TEMPERATUREを上げて多様性を増やす（0.9など）
 
 ## ログの見方
 
-```
+```bash
 🎭 Starting agent as 田中太郎
-📊 Initial phase: skeptical
-📝 Turn 3: User said: 群馬の部品メーカーさんでは...
-🔄 Phase transition: skeptical → interested
+   Voice: onyx
+   Temperature: 0.8
+✅ Agent session started
 ```
+
+シンプルなログのみ表示されます。フェーズ遷移のログは廃止されました。
 
 ## 参考資料
 
-- [設計書（bank_sales_design.md）](./bank_sales_design.md)
 - [OpenAI Realtime API Documentation](https://platform.openai.com/docs/guides/realtime-conversations)
 - [LiveKit Agents Documentation](https://docs.livekit.io/agents/)
+
+## 変更履歴
+
+### v2.0 (シンプル版) - 2025-10-18
+- ✨ フェーズ管理システムを削除してシンプル化
+- ✨ 具体的なセリフ指定を削除し、背景知識ベースに変更
+- ✨ コード量を81%削減（1,609行 → 298行）
+- ✨ より自然で柔軟な会話を実現
+
+### v1.0 (初版) - 2025-10-12
+- 🎉 初版リリース
+- フェーズ管理システム実装
+- 詳細な会話パターン定義
