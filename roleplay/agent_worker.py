@@ -7,6 +7,7 @@ import os
 import json
 import asyncio
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 import httpx
@@ -29,6 +30,13 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://localhost:7880")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
+
+# JSTタイムゾーン
+JST = ZoneInfo("Asia/Tokyo")
+
+def now_jst():
+    """現在時刻をJSTで返す"""
+    return datetime.now(JST)
 
 
 # プロンプト定義
@@ -217,8 +225,10 @@ async def entrypoint(ctx: JobContext):
     logger.info("✅ Agent session started")
 
     # Egress開始を非同期で実行（音声録音・会話はブロックしない）
+    egress_id = None
     if session_id and LIVEKIT_API_KEY and LIVEKIT_API_SECRET:
         async def start_egress_async():
+            nonlocal egress_id
             try:
                 egress_id = await start_egress(ctx.room.name, session_id)
                 logger.info(f"🎙️  Egress started: {egress_id}")
@@ -226,6 +236,13 @@ async def entrypoint(ctx: JobContext):
                 logger.error(f"Failed to start egress: {e}")
 
         asyncio.create_task(start_egress_async())
+
+    # Room切断イベントでセッション終了処理
+    @ctx.room.on("disconnected")
+    def on_room_disconnected():
+        """Room切断時にセッション終了処理"""
+        logger.info(f"🔌 Room disconnected, ending session {session_id}")
+        asyncio.create_task(end_session(session_id, egress_id))
 
     # Roomが切断されるまで待機（entrypoint関数を終了させない）
     await asyncio.Event().wait()
@@ -241,7 +258,7 @@ async def save_message(session_id: str, message_id: str, speaker: str, text: str
                     "message_id": message_id,
                     "speaker": speaker,
                     "text": text,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": now_jst().isoformat()
                 },
                 timeout=5.0
             )
@@ -251,6 +268,28 @@ async def save_message(session_id: str, message_id: str, speaker: str, text: str
                 logger.warning(f"⚠️  Failed to save message: {response.status_code}")
     except Exception as e:
         logger.error(f"❌ Error saving message to backend: {e}")
+
+
+async def end_session(session_id: str, egress_id: str):
+    """セッション終了処理をバックエンドに通知"""
+    try:
+        # Egressが録音したファイルのパス（Egressのファイル命名規則に基づく）
+        audio_file_path = f"session_{session_id}_{int(now_jst().timestamp())}.mp4" if egress_id else None
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{BACKEND_URL}/api/sessions/{session_id}/end",
+                json={
+                    "audio_file_path": audio_file_path
+                },
+                timeout=5.0
+            )
+            if response.status_code == 200:
+                logger.info(f"✅ Session ended: {session_id}")
+            else:
+                logger.warning(f"⚠️  Failed to end session: {response.status_code}")
+    except Exception as e:
+        logger.error(f"❌ Error ending session: {e}")
 
 
 async def start_egress(room_name: str, session_id: str) -> str:
