@@ -4,17 +4,31 @@
 """
 import logging
 import os
+import json
+import asyncio
+from datetime import datetime
 
 from dotenv import load_dotenv
+import httpx
+from livekit import api
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents.voice import ConversationItemAddedEvent
 from livekit.plugins import openai
 
 # ロギング設定
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("bank-sales-agent")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
+logging.getLogger("livekit.plugins.openai").setLevel(logging.DEBUG)
 
 # 環境変数の読み込み
 load_dotenv()
+
+# Backend URL設定
+BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://localhost:7880")
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 
 
 # プロンプト定義
@@ -77,15 +91,60 @@ async def entrypoint(ctx: JobContext):
     Args:
         ctx: JobContext
     """
+    await ctx.connect()
+
+    # メタデータからsession_id取得
+    # 既存のパーティシパントまたは新規参加を待機
+    session_id = None
+
+    # まず既存のパーティシパントをチェック
+    for participant in ctx.room.remote_participants.values():
+        if participant.metadata:
+            try:
+                metadata = json.loads(participant.metadata)
+                session_id = metadata.get("session_id")
+                if session_id:
+                    logger.info(f"📋 Session ID from existing participant: {session_id}")
+                    break
+            except json.JSONDecodeError:
+                continue
+
+    # 見つからない場合、パーティシパント参加イベントを待機
+    if not session_id:
+        logger.info("⏳ Waiting for participant to join...")
+        participant_future = asyncio.Future()
+
+        def on_participant_connected(participant):
+            if not participant_future.done() and participant.metadata:
+                try:
+                    metadata = json.loads(participant.metadata)
+                    sid = metadata.get("session_id")
+                    if sid:
+                        participant_future.set_result(sid)
+                except:
+                    pass
+
+        ctx.room.on("participant_connected", on_participant_connected)
+
+        try:
+            session_id = await asyncio.wait_for(participant_future, timeout=10.0)
+            logger.info(f"📋 Session ID from new participant: {session_id}")
+        except asyncio.TimeoutError:
+            logger.warning("⚠️  Timeout waiting for participant with session_id")
+        finally:
+            ctx.room.off("participant_connected", on_participant_connected)
+
     # 環境変数から設定を取得
     temperature = float(os.getenv("TEMPERATURE", "0.2"))
     voice = os.getenv("VOICE", "marin")
 
-    logger.info("🎭 Starting agent as 田中太郎")
+    logger.info("🎭 Starting agent as 山田ゆき")
     logger.info(f"   Voice: {voice}")
     logger.info(f"   Temperature: {temperature}")
+    logger.info(f"   Room: {ctx.room.name}")
 
     # OpenAI Realtime APIを使用したエージェントを作成
+    logger.info("🔌 Initializing OpenAI Realtime Model...")
     agent = Agent(
         instructions=INSTRUCTIONS,
         llm=openai.realtime.RealtimeModel(
@@ -94,12 +153,138 @@ async def entrypoint(ctx: JobContext):
             temperature=temperature,
         ),
     )
+    logger.info("✅ OpenAI Realtime Model initialized")
 
-    # AgentSessionを作成して開始
-    session = AgentSession()
-    await session.start(agent=agent, room=ctx.room)
+    # AgentSessionを作成
+    agent_session = AgentSession()
+
+    # イベントハンドラー: 会話アイテムが追加されたときにバックエンドに保存
+    @agent_session.on("conversation_item_added")
+    def on_conversation_item_added(event: ConversationItemAddedEvent):
+        """会話アイテムを即時保存"""
+        if not session_id:
+            logger.warning("Session ID not available, skipping message save")
+            return
+
+        speaker = "user" if event.item.role == "user" else "assistant"
+        message_id = f"{session_id}_{int(datetime.now().timestamp() * 1000)}_{speaker}"
+
+        logger.info(f"💬 Conversation item: {speaker} - {event.item.text_content[:50] if event.item.text_content else 'empty'}...")
+
+        # 非同期タスクとして実行
+        asyncio.create_task(save_message(
+            session_id=session_id,
+            message_id=message_id,
+            speaker=speaker,
+            text=event.item.text_content or ""
+        ))
+
+    # エラーハンドラー
+    @agent_session.on("error")
+    def on_error(error):
+        """エラーイベントをログに記録"""
+        logger.error(f"❌ Agent session error: {error}")
+
+    # 接続状態の監視
+    @agent_session.on("agent_started")
+    def on_agent_started():
+        """エージェント開始イベント"""
+        logger.info("🚀 Agent started and ready")
+
+    @agent_session.on("agent_speech_started")
+    def on_agent_speech_started():
+        """エージェントが話し始めた"""
+        logger.info("🗣️  Agent started speaking")
+
+    @agent_session.on("agent_speech_finished")
+    def on_agent_speech_finished():
+        """エージェントが話し終えた"""
+        logger.info("🤫 Agent finished speaking")
+
+    @agent_session.on("user_speech_started")
+    def on_user_speech_started():
+        """ユーザーが話し始めた"""
+        logger.info("👂 User started speaking")
+
+    @agent_session.on("user_speech_finished")
+    def on_user_speech_finished():
+        """ユーザーが話し終えた"""
+        logger.info("✋ User finished speaking")
+
+    # AgentSessionを開始
+    await agent_session.start(agent=agent, room=ctx.room)
 
     logger.info("✅ Agent session started")
+
+    # Egress開始を非同期で実行（音声録音・会話はブロックしない）
+    if session_id and LIVEKIT_API_KEY and LIVEKIT_API_SECRET:
+        async def start_egress_async():
+            try:
+                egress_id = await start_egress(ctx.room.name, session_id)
+                logger.info(f"🎙️  Egress started: {egress_id}")
+            except Exception as e:
+                logger.error(f"Failed to start egress: {e}")
+
+        asyncio.create_task(start_egress_async())
+
+    # Roomが切断されるまで待機（entrypoint関数を終了させない）
+    await asyncio.Event().wait()
+
+
+async def save_message(session_id: str, message_id: str, speaker: str, text: str):
+    """バックエンドAPIにメッセージを保存"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{BACKEND_URL}/api/sessions/{session_id}/messages",
+                json={
+                    "message_id": message_id,
+                    "speaker": speaker,
+                    "text": text,
+                    "timestamp": datetime.now().isoformat()
+                },
+                timeout=5.0
+            )
+            if response.status_code == 200:
+                logger.debug(f"✅ Message saved: {message_id}")
+            else:
+                logger.warning(f"⚠️  Failed to save message: {response.status_code}")
+    except Exception as e:
+        logger.error(f"❌ Error saving message to backend: {e}")
+
+
+async def start_egress(room_name: str, session_id: str) -> str:
+    """LiveKit Egressで録音を開始"""
+    try:
+        # LiveKit APIクライアント作成
+        livekit_api = api.LiveKitAPI(
+            url=LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://"),
+            api_key=LIVEKIT_API_KEY,
+            api_secret=LIVEKIT_API_SECRET
+        )
+
+        # Egress設定
+        output_filename = f"session_{session_id}_{int(datetime.now().timestamp())}"
+
+        # RoomCompositeEgressRequest作成
+        request = api.RoomCompositeEgressRequest(
+            room_name=room_name,
+            audio_only=True,
+            file_outputs=[
+                api.EncodedFileOutput(
+                    file_type=api.EncodedFileType.MP4,  # MP4形式
+                    filepath=f"/output/{output_filename}.mp4",
+                )
+            ],
+        )
+
+        # Egress開始
+        egress_info = await livekit_api.egress.start_room_composite_egress(request)
+        return egress_info.egress_id
+
+    except Exception as e:
+        logger.error(f"Failed to start egress: {e}")
+        raise
 
 
 if __name__ == "__main__":
