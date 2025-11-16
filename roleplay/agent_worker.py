@@ -189,7 +189,7 @@ async def entrypoint(ctx: JobContext):
 
     # 環境変数から設定を取得
     temperature = float(os.getenv("TEMPERATURE", "0.2"))
-    voice = os.getenv("VOICE", "marin")
+    voice = os.getenv("VOICE", "cedar")
 
     logger.info("🎭 Starting agent as 山田ゆき")
     logger.info(f"   Voice: {voice}")
@@ -282,15 +282,23 @@ async def entrypoint(ctx: JobContext):
 
         asyncio.create_task(start_egress_async())
 
-    # Room切断イベントでセッション終了処理
+    # Room切断イベントを待機するためのFuture
+    disconnected_future = asyncio.Future()
+
     @ctx.room.on("disconnected")
     def on_room_disconnected():
-        """Room切断時にセッション終了処理"""
-        logger.info(f"🔌 Room disconnected, ending session {session_id}")
-        asyncio.create_task(end_session(session_id, egress_id))
+        """Room切断時にFutureを完了させる"""
+        logger.info(f"🔌 Room disconnected")
+        if not disconnected_future.done():
+            disconnected_future.set_result(True)
 
-    # Roomが切断されるまで待機（entrypoint関数を終了させない）
-    await asyncio.Event().wait()
+    # Roomが切断されるまで待機
+    await disconnected_future
+
+    # Room切断後、セッション終了処理を同期的に実行
+    logger.info(f"🔄 Ending session {session_id}...")
+    await end_session(session_id, egress_id)
+    logger.info(f"✅ Session end processing completed")
 
 
 async def save_message(session_id: str, message_id: str, speaker: str, text: str):
@@ -334,8 +342,13 @@ async def end_session(session_id: str, egress_id: str):
         logger.error(f"❌ Error ending session: {e}")
 
 
-async def start_egress(room_name: str, session_id: str) -> str:
-    """LiveKit Egressで録音を開始"""
+async def start_egress(room_name: str, session_id: str) -> tuple[str, str]:
+    """
+    LiveKit Egressで録音を開始
+
+    Returns:
+        tuple[str, str]: (egress_id, audio_file_path)
+    """
     try:
         # LiveKit APIクライアント作成
         livekit_api = api.LiveKitAPI(
@@ -346,6 +359,8 @@ async def start_egress(room_name: str, session_id: str) -> str:
 
         # Egress設定
         output_filename = f"session_{session_id}_{int(datetime.now().timestamp())}"
+        # バックエンドからは /audio_files でマウントされている
+        audio_file_path = f"/audio_files/{output_filename}.mp4"
 
         # RoomCompositeEgressRequest作成
         request = api.RoomCompositeEgressRequest(
@@ -361,7 +376,7 @@ async def start_egress(room_name: str, session_id: str) -> str:
 
         # Egress開始
         egress_info = await livekit_api.egress.start_room_composite_egress(request)
-        return egress_info.egress_id
+        return egress_info.egress_id, audio_file_path
 
     except Exception as e:
         logger.error(f"Failed to start egress: {e}")
