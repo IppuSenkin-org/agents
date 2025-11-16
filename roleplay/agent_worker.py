@@ -318,15 +318,12 @@ async def save_message(session_id: str, message_id: str, speaker: str, text: str
 async def end_session(session_id: str, egress_id: str):
     """セッション終了処理をバックエンドに通知"""
     try:
-        # Egressが録音したファイルのパス（Egressのファイル命名規則に基づく）
-        audio_file_path = f"session_{session_id}_{int(now_jst().timestamp())}.mp4" if egress_id else None
-
+        # Webhookで音声ファイルパスが設定されるため、ここでは設定不要
+        # セッション終了のみ通知
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{BACKEND_URL}/api/sessions/{session_id}/end",
-                json={
-                    "audio_file_path": audio_file_path
-                },
+                json={},
                 timeout=5.0
             )
             if response.status_code == 200:
